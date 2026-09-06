@@ -1,0 +1,75 @@
+name: PR conventions check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  branch-name:
+    name: Validate branch name
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check branch naming convention
+        env:
+          BRANCH_NAME: ${{ github.head_ref }}
+        run: |
+          echo "Branch: $BRANCH_NAME"
+          PATTERN='^(feat|fix|docs|chore|refactor|test)/[a-z0-9]+(-[a-z0-9]+)*$'
+
+          if [[ ! "$BRANCH_NAME" =~ $PATTERN ]]; then
+            echo "::error::Branch name '$BRANCH_NAME' does not match the required convention."
+            echo "Expected format: <type>/<kebab-case-description>"
+            echo "Allowed types: feat, fix, docs, chore, refactor, test"
+            echo "Example: feat/lab-02-helm-charts"
+            exit 1
+          fi
+
+          echo "Branch name is valid."
+
+  commit-messages:
+    name: Validate commit messages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install commitlint
+        run: |
+          npm install --no-save @commitlint/cli @commitlint/config-conventional
+
+      - name: Lint all commits in this PR
+        run: |
+          npx commitlint \
+            --from "origin/${{ github.base_ref }}" \
+            --to "${{ github.event.pull_request.head.sha }}" \
+            --verbose
+
+      - name: Reject non-English commit messages (accented characters)
+        run: |
+          git fetch origin "${{ github.base_ref }}"
+          COMMITS=$(git log --pretty=format:"%H %s" "origin/${{ github.base_ref }}..${{ github.event.pull_request.head.sha }}")
+
+          if [ -z "$COMMITS" ]; then
+            echo "No commits to check."
+            exit 0
+          fi
+
+          FAILED=0
+          while IFS= read -r line; do
+            SHA=$(echo "$line" | cut -d' ' -f1)
+            SUBJECT=$(echo "$line" | cut -d' ' -f2-)
+
+            if echo "$SUBJECT" | grep -qP '[àâäéèêëîïôöùûüÿçœÀÂÄÉÈÊËÎÏÔÖÙÛÜŸÇŒ]'; then
+              echo "::error::Commit $SHA contains non-English characters: \"$SUBJECT\""
+              FAILED=1
+            fi
+          done <<< "$COMMITS"
+
+          if [ "$FAILED" -eq 1 ]; then
+            echo "One or more commit messages appear to be written in French. Commit messages must be in English."
+            exit 1
+          fi
+
+          echo "All commit messages appear to be in English."
